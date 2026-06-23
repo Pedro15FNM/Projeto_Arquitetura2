@@ -1,0 +1,6 @@
+# Testes da ULA Mic-1
+# Formato: F0 F1 ENA ENB INVA INC
+111100
+001100
+011100
+101100
