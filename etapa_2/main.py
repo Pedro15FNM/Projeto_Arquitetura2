@@ -45,8 +45,8 @@
     (uma linha por instrução executada)
 
   Uso:
-    python ula_mic1_etapa2.py                        # demos internas
-    python ula_mic1_etapa2.py prog.txt saida.txt A B # arquivo customizado
+    python ula_mic1_etapa2.py                         # usa arquivos padrão
+    python ula_mic1_etapa2.py prog.txt saida.txt A B  # arquivos customizados
 =============================================================================
 """
 
@@ -121,7 +121,7 @@ def ula_8bit_core(
     ena: int, enb: int,
     inva: int, inc: int,
     a: int, b: int,
-) -> tuple[int, int, list[dict]]:
+) -> tuple[int, int]:
     """
     Núcleo da ULA de 8 bits: encadeia 8 instâncias de ULA de 1 bit.
 
@@ -136,15 +136,13 @@ def ula_8bit_core(
 
     Retorna
     -------
-    (S, vai_um, detalhes_por_bit)
+    (S, vai_um)
       S        : resultado de 8 bits (unsigned)
       vai_um   : carry-out do MSB
-      detalhes : lista de dicts com os sinais de cada bit
     """
     op    = decode_operation(f0, f1)
     carry = inc          # INC injeta carry=1 apenas no bit 0 (LSB)
     s_val = 0
-    detalhes = []
 
     for i in range(BITS):           # i=0 → LSB, i=7 → MSB
         # extrai o bit i de cada operando
@@ -184,21 +182,7 @@ def ula_8bit_core(
         s_val |= (s_bit << i)
         carry  = c_out
 
-        detalhes.append({
-            "bit"      : i,
-            "a_bit"    : a_bit,
-            "b_bit"    : b_bit,
-            "a_en"     : a_en,
-            "b_en"     : b_en,
-            "a_inv"    : a_inv,
-            "vem_um"   : vem_um,
-            "logic_out": logic_out,
-            "s_bit"    : s_bit,
-            "c_out"    : c_out,
-            "op"       : op,
-        })
-
-    return s_val & MASK, carry, detalhes
+    return s_val & MASK, carry
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -295,7 +279,7 @@ def ula_etapa2(ir_str: str, a: int, b: int) -> dict:
     inc  = fields["INC"]
 
     # 1. Núcleo da ULA (8 bits encadeados)
-    s_raw, vai_um, bit_details = ula_8bit_core(f0, f1, ena, enb, inva, inc, a, b)
+    s_raw, vai_um = ula_8bit_core(f0, f1, ena, enb, inva, inc, a, b)
 
     # 2. Deslocador (atua sobre S, APÓS a ULA)
     sd, shift_desc = shifter(s_raw, sll8, sra1)
@@ -325,8 +309,6 @@ def ula_etapa2(ir_str: str, a: int, b: int) -> dict:
         "Sd"         : sd,          # saída deslocada
         "N"          : n_flag,      # flag negativo
         "Z"          : z_flag,      # flag zero
-        # Detalhes bit a bit
-        "bit_details": bit_details,
     }
 
 
@@ -366,10 +348,108 @@ def parse_instruction_8bit(ir_str: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Leitura do arquivo de programa
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_program(path: str) -> list[str]:
+    """
+    Lê o arquivo .txt e retorna lista de strings de instrução (8 bits cada).
+    Ignora linhas vazias e comentários (# ...).
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Arquivo não encontrado: '{path}'")
+    instructions = []
+    with open(path, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.split("#")[0].strip()
+            if line:
+                instructions.append(line)
+    return instructions
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Execução do programa e geração de log
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_program(
+    instructions: list[str],
+    a: int,
+    b: int,
+    log_path: str | None = None,
+    verbose: bool = True,
+):
+    """
+    Executa a sequência de instruções da ULA de 8 bits.
+
+    Parâmetros
+    ----------
+    instructions  : lista de strings de 8 bits
+    a, b          : operandos (inteiros 0..255), fixos para toda a execução
+    log_path      : caminho do arquivo de log (None = não grava)
+    verbose       : imprime trace detalhado de cada instrução
+    """
+    # Cabeçalho do log
+    log_header = (
+        f"{'PC':>3} | {'IR':^8} | {'A':^10} | {'B':^10} | "
+        f"{'Sd':^10} | {'Vai-um':^6} | {'N':^1} | {'Z':^1}"
+    )
+    log_sep    = "-" * len(log_header)
+    log_lines  = [log_header, log_sep]
+
+    print(H("\n══════════════════════════════════════════════════════════════════"))
+    print(H("  ULA Mic-1 Etapa 2 — Execução do Programa"))
+    print(H("══════════════════════════════════════════════════════════════════"))
+    print(f"  Operandos: A = {B(f'{a:08b}')} ({a:3d})   B = {B(f'{b:08b}')} ({b:3d})")
+    print(f"  Total de instruções: {len(instructions)}")
+
+    results = []
+    for pc, ir_str in enumerate(instructions):
+        try:
+            r = ula_etapa2(ir_str, a, b)
+        except ValueError as e:
+            print(RD(f"\n  [PC={pc:03d}] ERRO: {e}"))
+            continue
+
+        if verbose:
+            trace_instrucao(pc, ir_str, r)
+
+        # Linha de log
+        sd_str = f"{r['Sd']:#06x}" if r['sll8'] else f"{r['Sd']:#04x}"
+        log_line = (
+            f"{pc:3d} | {ir_str:^8} | {r['a']:^10} | {r['b']:^10} | "
+            f"{r['Sd']:^10} | {r['vai_um']:^6} | {r['N']:^1} | {r['Z']:^1}"
+        )
+        log_lines.append(log_line)
+        results.append((pc, ir_str, r))
+
+    # ── Sumário ──────────────────────────────────────────────────────────────
+    print(H("\n══════════════════════════════════════════════════════════════════"))
+    print(H("  Resumo das Saídas"))
+    print(H("══════════════════════════════════════════════════════════════════"))
+    print(f"  {BOLD}{log_header}{RST}")
+    print(D("  " + log_sep))
+    for pc, ir_str, r in results:
+        n_s = HL(str(r['N'])) if r['N'] else str(r['N'])
+        z_s = HL(str(r['Z'])) if r['Z'] else str(r['Z'])
+        v_s = HL(str(r['vai_um'])) if r['vai_um'] else str(r['vai_um'])
+        sd_s = HL(str(r['Sd']))
+        print(f"  {pc:3d} | {ir_str:^8} | {r['a']:^10} | {r['b']:^10} | "
+              f"{sd_s:}  | {v_s:}  | {n_s} | {z_s}")
+
+    # Grava log
+    if log_path:
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(log_lines) + "\n")
+        print(G(f"\n  Log gravado em: {log_path}"))
+
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Trace detalhado de uma instrução
 # ─────────────────────────────────────────────────────────────────────────────
 
-def trace_instrucao(pc: int, ir_str: str, r: dict, verbose_bits: bool = False):
+def trace_instrucao(pc: int, ir_str: str, r: dict):
     """
     Imprime o trace passo a passo de uma instrução de 8 bits.
     """
@@ -421,20 +501,7 @@ def trace_instrucao(pc: int, ir_str: str, r: dict, verbose_bits: bool = False):
     print(f"  {G('④ Saída ULA:')} S_raw = {HL(s_raw_bin)} ({f['S_raw']:3d})   "
           f"Vai-um = {HL(str(f['vai_um']))}")
 
-    # Detalhe bit a bit (opcional)
-    if verbose_bits:
-        print(f"    {D('Bit-a-bit (LSB→MSB):')}")
-        print(f"    {'Bit':>3}  {'A':^3} {'B':^3} {'Cin':^4} {'S':^3} {'Cout':^5}  Op")
-        print(f"    {D('─' * 40)}")
-        for d in f['bit_details']:
-            print(
-                f"    {d['bit']:>3}  {d['a_bit']:^3} {d['b_bit']:^3} "
-                f"{d['vem_um']:^4} {HL(str(d['s_bit'])):}  "
-                f"{HL(str(d['c_out'])):}    {d['op']}"
-            )
-
     # ── Etapa 5: Deslocador ──────────────────────────────────────────────────
-    shift_active = f['sll8'] or f['sra1']
     shift_label  = "SLL8" if f['sll8'] else ("SRA1" if f['sra1'] else "Passagem direta")
     if f['sll8']:
         sd_bin = f"{f['Sd']:016b}"
@@ -468,194 +535,7 @@ def trace_instrucao(pc: int, ir_str: str, r: dict, verbose_bits: bool = False):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Leitura do arquivo de programa
-# ─────────────────────────────────────────────────────────────────────────────
-
-def load_program(path: str) -> list[str]:
-    """
-    Lê o arquivo .txt e retorna lista de strings de instrução (8 bits cada).
-    Ignora linhas vazias e comentários (# ...).
-    """
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Arquivo não encontrado: '{path}'")
-    instructions = []
-    with open(path, "r", encoding="utf-8") as f:
-        for raw in f:
-            line = raw.split("#")[0].strip()
-            if line:
-                instructions.append(line)
-    return instructions
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Execução do programa e geração de log
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_program(
-    instructions: list[str],
-    a: int = 0b10110100,   # 180 por padrão
-    b: int = 0b00110011,   # 51  por padrão
-    log_path: str | None = None,
-    verbose: bool = True,
-    verbose_bits: bool = False,
-):
-    """
-    Executa a sequência de instruções da ULA de 8 bits.
-
-    Parâmetros
-    ----------
-    instructions  : lista de strings de 8 bits
-    a, b          : operandos (inteiros 0..255), fixos para toda a execução
-    log_path      : caminho do arquivo de log (None = não grava)
-    verbose       : imprime trace detalhado de cada instrução
-    verbose_bits  : inclui detalhe bit a bit no trace
-    """
-    # Cabeçalho do log
-    log_header = (
-        f"{'PC':>3} | {'IR':^8} | {'A':^10} | {'B':^10} | "
-        f"{'Sd':^10} | {'Vai-um':^6} | {'N':^1} | {'Z':^1}"
-    )
-    log_sep    = "-" * len(log_header)
-    log_lines  = [log_header, log_sep]
-
-    print(H("\n══════════════════════════════════════════════════════════════════"))
-    print(H("  ULA Mic-1 Etapa 2 — Execução do Programa"))
-    print(H("══════════════════════════════════════════════════════════════════"))
-    print(f"  Operandos: A = {B(f'{a:08b}')} ({a:3d})   B = {B(f'{b:08b}')} ({b:3d})")
-    print(f"  Total de instruções: {len(instructions)}")
-
-    results = []
-    for pc, ir_str in enumerate(instructions):
-        try:
-            r = ula_etapa2(ir_str, a, b)
-        except ValueError as e:
-            print(RD(f"\n  [PC={pc:03d}] ERRO: {e}"))
-            continue
-
-        if verbose:
-            trace_instrucao(pc, ir_str, r, verbose_bits=verbose_bits)
-
-        # Linha de log
-        sd_str = f"{r['Sd']:#06x}" if r['sll8'] else f"{r['Sd']:#04x}"
-        log_line = (
-            f"{pc:3d} | {ir_str:^8} | {r['a']:^10} | {r['b']:^10} | "
-            f"{r['Sd']:^10} | {r['vai_um']:^6} | {r['N']:^1} | {r['Z']:^1}"
-        )
-        log_lines.append(log_line)
-        results.append((pc, ir_str, r))
-
-    # ── Sumário ──────────────────────────────────────────────────────────────
-    print(H("\n══════════════════════════════════════════════════════════════════"))
-    print(H("  Resumo das Saídas"))
-    print(H("══════════════════════════════════════════════════════════════════"))
-    print(f"  {BOLD}{log_header}{RST}")
-    print(D("  " + log_sep))
-    for pc, ir_str, r in results:
-        n_s = HL(str(r['N'])) if r['N'] else str(r['N'])
-        z_s = HL(str(r['Z'])) if r['Z'] else str(r['Z'])
-        v_s = HL(str(r['vai_um'])) if r['vai_um'] else str(r['vai_um'])
-        sd_s = HL(str(r['Sd']))
-        print(f"  {pc:3d} | {ir_str:^8} | {r['a']:^10} | {r['b']:^10} | "
-              f"{sd_s:}  | {v_s:}  | {n_s} | {z_s}")
-
-    # Grava log
-    if log_path:
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(log_lines) + "\n")
-        print(G(f"\n  Log gravado em: {log_path}"))
-
-    return results
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Demos internas
-# ─────────────────────────────────────────────────────────────────────────────
-
-def demo_deslocamentos():
-    """Demonstra SLL8 e SRA1 com exemplos concretos."""
-    print(H("\n╔══════════════════════════════════════════════════════════════════╗"))
-    print(H("║  DEMO — SLL8 e SRA1 (novos sinais da Etapa 2)                    ║"))
-    print(H("╚══════════════════════════════════════════════════════════════════╝"))
-
-    casos = [
-        # IR           A     B    descricao
-        # ── SEM deslocamento ─────────────────────────────────────────────────
-        ("00111100", 0b10110101, 0b01001010,
-         "ADD A+B, sem deslocamento"),
-        # ── SLL8: desloca resultado 8 bits à esquerda ─────────────────────────
-        ("10111100", 0b10110101, 0b01001010,
-         "ADD A+B + SLL8 (resultado vai para byte alto)"),
-        # ── SRA1: desloca 1 bit à direita, preserva sinal ────────────────────
-        ("01111100", 0b10110101, 0b01001010,
-         "ADD A+B + SRA1 (desloc. aritmético →, sinal preservado)"),
-        # ── SRA1 com número negativo (MSB=1) ─────────────────────────────────
-        ("01111100", 0b11110000, 0b00000000,
-         "ADD A+0 + SRA1 (A negativo: 0xF0, SRA1 deve manter sinal)"),
-        # ── SLL8 com resultado zero ───────────────────────────────────────────
-        ("10110000", 0b10101010, 0b01010101,
-         "AND A=0xAA, B=0x55 + SLL8 (AND=0, Z deve ser 1)"),
-        # ── Flag N: resultado negativo ────────────────────────────────────────
-        ("00111100", 0b11000000, 0b00000001,
-         "ADD 0xC0 + 0x01 = 0xC1 → N=1 (MSB=1)"),
-        # ── Flag Z: resultado zero ────────────────────────────────────────────
-        ("00110000", 0b00000000, 0b00000000,
-         "ADD 0+0=0 → Z=1"),
-        # ── SRA1 com número positivo (sem extensão de sinal) ──────────────────
-        ("01111100", 0b01110000, 0b00000000,
-         "ADD 0x70+0 + SRA1 (positivo: MSB=0, desloca com 0)"),
-    ]
-
-    for ir_str, a, b, desc in casos:
-        print(H(f"\n  ▸ {desc}"))
-        r = ula_etapa2(ir_str, a, b)
-        trace_instrucao(0, ir_str, r, verbose_bits=False)
-
-
-def demo_flags():
-    """Demonstra as flags N e Z em situações limítrofes."""
-    print(H("\n╔══════════════════════════════════════════════════════════════════╗"))
-    print(H("║  DEMO — Tabela de Flags N e Z                                    ║"))
-    print(H("╚══════════════════════════════════════════════════════════════════╝"))
-
-    casos = [
-        # IR           A     B    desc                      N_esp  Z_esp
-        ("00111100", 0xFF, 0x01, "0xFF + 0x01 = 0x00 (overflow)", 0, 1),
-        ("00111100", 0x7F, 0x00, "0x7F + 0x00 = 0x7F",            0, 0),
-        ("00111100", 0x80, 0x00, "0x80 + 0x00 = 0x80 (negativo)", 1, 0),
-        ("00001100", 0b10101010, 0b01010101, "AND 0xAA & 0x55 = 0",0, 1),
-        ("00001100", 0b11110000, 0b11000000, "AND 0xF0 & 0xC0 = 0xC0 (neg)", 1, 0),
-        ("01111100", 0x81, 0x00, "SRA1: 0x81>>1 com sinal = 0xC0",1, 0),
-        ("01111100", 0x7E, 0x00, "SRA1: 0x7E>>1 = 0x3F",          0, 0),
-        ("10111100", 0x00, 0x00, "SLL8: 0x00<<8 = 0x0000, Z=1",   0, 1),
-    ]
-
-    print(f"\n  {'IR':^8}  {'A':^6} {'B':^6}  {'Descrição':<38}  "
-          f"{'Sd':>6}  {'V':^3} {'N esp':^5} {'N':^3}  {'Z esp':^5} {'Z':^3}  {'OK':^4}")
-    print(D("  " + "─" * 95))
-
-    for ir_str, a, b, desc, n_esp, z_esp in casos:
-        r   = ula_etapa2(ir_str, a, b)
-        ok  = (r['N'] == n_esp) and (r['Z'] == z_esp)
-        chk = G("✓") if ok else RD("✗")
-        print(f"  {ir_str}  {a:#06x} {b:#06x}  {desc:<38}  "
-              f"{r['Sd']:>6}  {r['vai_um']:^3} {n_esp:^5} "
-              f"{HL(str(r['N'])):}  {z_esp:^5} "
-              f"{HL(str(r['Z'])):}  {chk}")
-
-
-def demo_arquivo(prog_path: str, a: int, b: int, log_path: str,
-                 verbose_bits: bool = False):
-    """Lê um arquivo .txt de 8 bits e executa as instruções."""
-    print(H("\n╔══════════════════════════════════════════════════════════════════╗"))
-    print(H(f"║  Executando: {prog_path:<52}║"))
-    print(H("╚══════════════════════════════════════════════════════════════════╝"))
-    instructions = load_program(prog_path)
-    run_program(instructions, a=a, b=b, log_path=log_path,
-                verbose=True, verbose_bits=verbose_bits)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Arquivo de programa de exemplo (Etapa 2)
+# Gerador de arquivo de exemplo
 # ─────────────────────────────────────────────────────────────────────────────
 
 EXEMPLO_PROGRAMA_E2 = """\
@@ -663,16 +543,9 @@ EXEMPLO_PROGRAMA_E2 = """\
 # Formato: SLL8 SRA1 F0 F1 ENA ENB INVA INC  (8 bits, sem espaços)
 #
 # SLL8 SRA1 F0 F1 ENA ENB INVA INC   Operação
-00111100   # ADD   A+B (sem deslocamento)
 10111100   # ADD   A+B + SLL8
 01111100   # ADD   A+B + SRA1
-00001100   # AND   A AND B
-00011100   # OR    A OR  B
-00101100   # NOT_B ~B
-00111101   # ADD   A+B + INVA (A invertido)
-00111111   # SUB   A-B (INVA=1, INC=1)
-00110001   # INC   0+0+1=1 (ENA=ENB=0, INC=1)
-00110000   # ZERO  ENA=ENB=0, sem INC
+00111100   # ADD   A+B (sem deslocamento)
 """
 
 def gerar_exemplo_e2():
@@ -685,37 +558,73 @@ def gerar_exemplo_e2():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Ponto de entrada
+# Ponto de entrada principal (refatorado)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    args = sys.argv[1:]
+    """
+    Ponto de entrada principal do programa.
+    Suporta argumentos de linha de comando:
+        python ula_mic1_etapa2.py
+        python ula_mic1_etapa2.py programa.txt saida.txt A B
+    """
+    # Valores padrão
+    prog_path = 'programa_etapa2_tarefa1.txt'
+    saida_path = 'saida_etapa2_tarefa1.txt'
+    
+    # Valores padrão para A e B (compatíveis com os testes)
+    a = 0b10110101  # 181 (0xB5)
+    b = 0b01001010  # 74  (0x4A)
 
-    if "--demo" in args or len(args) == 0:
-        demo_deslocamentos()
-        demo_flags()
+    # Processa argumentos da linha de comando
+    if len(sys.argv) > 1:
+        prog_path = sys.argv[1]
+    if len(sys.argv) > 2:
+        saida_path = sys.argv[2]
+    if len(sys.argv) > 3:
+        try:
+            a = int(sys.argv[3], 0) & 0xFF  # aceita decimal ou hex (0x...)
+        except ValueError:
+            print(f"Erro: valor inválido para A: '{sys.argv[3]}'")
+    if len(sys.argv) > 4:
+        try:
+            b = int(sys.argv[4], 0) & 0xFF
+        except ValueError:
+            print(f"Erro: valor inválido para B: '{sys.argv[4]}'")
 
-        prog = gerar_exemplo_e2()
-        print()
-        # A=0b10110101=181, B=0b01001010=74 (valores de demonstração)
-        demo_arquivo(prog, a=0b10110101, b=0b01001010,
-                     log_path="saida_etapa2_tarefa1.txt",
-                     verbose_bits=False)
-        return
+    # Verifica se o arquivo de programa existe; se não, gera o exemplo
+    if not os.path.exists(prog_path):
+        print(f"Aviso: Arquivo '{prog_path}' não encontrado. Gerando exemplo...")
+        prog_path = gerar_exemplo_e2()
 
-    if "--bits" in args:
-        args.remove("--bits")
-        vbits = True
-    else:
-        vbits = False
+    try:
+        # Carrega o programa
+        instrucoes = load_program(prog_path)
+        if not instrucoes:
+            print(f"Erro: Nenhuma instrução válida em '{prog_path}'")
+            return
 
-    if len(args) >= 1:
-        prog_path = args[0]
-        log_path  = args[1] if len(args) >= 2 else "saida_etapa2_tarefa1.txt"
-        a = int(args[2], 0) if len(args) >= 3 else 0b10110101
-        b = int(args[3], 0) if len(args) >= 4 else 0b01001010
-        demo_arquivo(prog_path, a=a, b=b, log_path=log_path, verbose_bits=vbits)
+        print(f"\nCarregando programa: {prog_path}")
+        print(f"Instruções: {len(instrucoes)}")
+        print(f"Entradas: A={a} (0x{a:02X}), B={b} (0x{b:02X})")
 
+        # Executa o programa
+        resultados = run_program(
+            instructions=instrucoes,
+            a=a,
+            b=b,
+            log_path=saida_path,
+            verbose=True
+        )
+
+        print(f"\nExecução concluída. {len(resultados)} instruções processadas.")
+
+    except FileNotFoundError as e:
+        print(f"Erro: {e}")
+    except ValueError as e:
+        print(f"Erro: {e}")
+    except Exception as e:
+        print(f"Erro inesperado: {e}")
 
 if __name__ == "__main__":
     main()
