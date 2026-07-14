@@ -145,12 +145,21 @@ class Registradores:
     def formatar(self):
         ordem = ["MAR", "MDR", "PC", "MBR", "SP", "LV", "CPP", "TOS", "OPC", "H"]
         resultado = []
+        
+        # Cabeçalho da tabela de registradores
+        resultado.append(f"  {'REG':<3} | {'HEX':<10} | {'DEC':<5} | BINÁRIO")
+        resultado.append("  " + "-"*65)
+        
         for nome in ordem:
             valor = self.get(nome)
             if nome == "MBR":
-                resultado.append(f"{nome.lower()} = {format(valor, '08b')}")
+                bin_str = format(valor, '08b')
+                resultado.append(f"  {nome:<3} | 0x{valor:02X}{' '*8} | {valor:<5} | {bin_str}")
             else:
-                resultado.append(f"{nome.lower()} = {format(valor, '032b')}")
+                bin_str = f"{valor:032b}"
+                # Agrupa os bits de 8 em 8 para facilitar a leitura
+                bin_fmt = f"{bin_str[:8]} {bin_str[8:16]} {bin_str[16:24]} {bin_str[24:]}"
+                resultado.append(f"  {nome:<3} | 0x{valor:08X} | {valor:<5} | {bin_fmt}")
         return "\n".join(resultado)
 
 # =============================================================================
@@ -220,10 +229,20 @@ class Memoria:
                         self.dados[i] = converter_binario_para_int(linha)
     
     def formatar(self):
-        return "\n".join(
-            f"  dados[{i}] = {format(v, '032b')} ({v})"
-            for i, v in enumerate(self.dados)
-        )
+        linhas = []
+        linhas.append(f"  {'END':<5} | {'HEX':<10} | {'DEC':<5} | BINÁRIO")
+        linhas.append("  " + "-"*65)
+        
+        for i, v in enumerate(self.dados):
+            # Mostra apenas as 11 primeiras posições ou qualquer endereço diferente de zero
+            if i <= 10 or v != 0:
+                bin_str = f"{v:032b}"
+                bin_fmt = f"{bin_str[:8]} {bin_str[8:16]} {bin_str[16:24]} {bin_str[24:]}"
+                linhas.append(f"  [{i:02d}]  | 0x{v:08X} | {v:<5} | {bin_fmt}")
+            elif i == 11 and len(self.dados) > 11:
+                linhas.append("  ...   | (endereços vazios ocultados)")
+                
+        return "\n".join(linhas)
 
 # =============================================================================
 # MIC-1 DATAPATH
@@ -305,24 +324,32 @@ class Mic1Datapath:
         estado_final = self.regs.formatar()
         memoria_final = self.memoria.formatar()
         
-        log.append("=" * 90)
-        log.append(f"IR                 : {ir}")
-        log.append("")
-        log.append("REGISTRADORES (ANTES)")
+        # Formatação do Log do Ciclo
+        log.append("╭" + "─" * 85 + "╮")
+        log.append(f"│ IR: {ir[:8]} {ir[8:17]} {ir[17:19]} {ir[19:]} {'':<39} │")
+        log.append("├" + "─" * 85 + "┤")
+        
+        log.append("  [ ESTADO ANTES ]")
         log.append(estado_inicial)
         log.append("")
-        log.append(f"Barramento B       : {nome_b}")
-        log.append(f"Barramento C       : {', '.join(escritos) if escritos else 'NENHUM'}")
-        log.append(f"ULA                : {resultado_ula['op']} → Sd = {format(resultado, '032b')}")
-        log.append(f"Memória            : {operacao}")
-        log.append(f"Flags              : N={resultado_ula['N']} Z={resultado_ula['Z']} Vai-um={resultado_ula['vai_um']}")
+        
+        # Destaca o que aconteceu no ciclo
+        log.append("  [ AÇÃO DO CICLO ]")
+        log.append(f"  ▸ Barramento B : {nome_b}")
+        log.append(f"  ▸ ULA          : {resultado_ula['op']} → Resultado = {resultado} (0x{resultado:08X})")
+        log.append(f"  ▸ Flags        : N={resultado_ula['N']}  Z={resultado_ula['Z']}  Vai-um={resultado_ula['vai_um']}")
+        log.append(f"  ▸ Barramento C : {', '.join(escritos) if escritos else 'NENHUM'}")
+        log.append(f"  ▸ Memória      : {operacao}")
         log.append("")
-        log.append("REGISTRADORES (DEPOIS)")
+        
+        log.append("  [ ESTADO DEPOIS ]")
         log.append(estado_final)
         log.append("")
-        log.append("MEMÓRIA")
-        log.append(memoria_final)
-        
+        if operacao != "NENHUMA":
+            log.append("  [ ESTADO DA MEMÓRIA ATUALIZADO ]")
+            log.append(memoria_final)
+            log.append("")
+            
         return log
     
     def estado_memoria(self):
