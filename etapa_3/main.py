@@ -336,42 +336,25 @@ def traduzir_iload(x):
     micros = []
     micros.append("00110100100000000000101")  # H = LV
     for _ in range(x):
-        micros.append("00111101100000000001001")  # H = H + 1
-    micros.append("00110100000000000101001")  # MAR = H; rd
-    micros.append("00111101000000010001100")  # MAR = SP = SP + 1; wr
-    micros.append("00110100001000000000000")  # TOS = MDR
+        micros.append("00111001100000000000000")  # H = H + 1
+    micros.append("00111000000000001010000")  # MAR = H; rd
+    micros.append("00110101000001001000100")  # MAR = SP = SP + 1
+    micros.append("00110100001000000100000")  # TOS = MDR; wr
     return micros
 
 def traduzir_dup():
     micros = []
-    micros.append("00110100000000000100100")  # MAR = SP; rd
-    micros.append("00111101000000010001100")  # SP = SP + 1; MAR = SP; wr
-    micros.append("00110100001000000000000")  # TOS = MDR
+    micros.append("00110101000001001000100")  # MAR = SP = SP + 1
+    micros.append("00110100000000010100111")  # MDR = TOS; wr
     return micros
 
 def traduzir_bipush(byte):
-    """
-    Traduz BIPUSH byte para microinstruções de 23 bits.
-    
-    BIPUSH byte:
-        1. SP = SP + 1; MAR = SP; wr
-        2. TOS = byte (via MBR)
-    """
     micros = []
-    
-    # 1. SP = SP + 1; MAR = SP; wr
-    # ULA: S = SP + 1, C: SP, MAR, MEM: WRITE, B: SP (0100)
-    micros.append("00111101000000010001100")  # 23 bits
-    
-    # 2. TOS = byte via MBR
-    # Formato: [8b ULA = byte][9b C = TOS][2b Mem = 00][4b B = MBR (0010)]
-    byte_bits = format(byte & 0xFF, '08b')
-    # C: TOS habilitado (bit 6 da posição 0) = posição 12 da string
-    # 9 bits: 000010000 (bit 6 = 1)
-    micro = byte_bits + "000010000" + "00" + "0010"
-    #        8 bits   +   9 bits   + 2  +  4   = 23 bits
-    micros.append(micro)
-    
+    micros.append("00110000100000000000000")  # H = 0
+    for _ in range(byte):
+        micros.append("00111001100000000000000")  # H = H + 1
+    micros.append("00111000001000010000000")  # MDR = H; TOS = H
+    micros.append("00110101000001001100100")  # MAR = SP = SP + 1; wr
     return micros
 
 def interpretar_ijvm(arquivo):
