@@ -62,7 +62,7 @@ def ula_32(sll8, sra1, f0, f1, ena, enb, inva, inc, a, b):
     op_map = {(0, 0): "AND", (0, 1): "OR", (1, 0): "NOT_B", (1, 1): "ADD"}
     op = op_map[(f0, f1)]
     
-    carry = inc
+    carry = 0
     s_val = 0
     
     # Loop bit a bit
@@ -70,6 +70,8 @@ def ula_32(sll8, sra1, f0, f1, ena, enb, inva, inc, a, b):
         a_bit = (a >> i) & 1
         b_bit = (b >> i) & 1
         
+        cin = inc if i == 0 else carry
+
         a_en = a_bit & ena
         b_en = b_bit & enb
         a_inv = a_en ^ inva
@@ -81,7 +83,7 @@ def ula_32(sll8, sra1, f0, f1, ena, enb, inva, inc, a, b):
         elif op == "NOT_B":
             s_bit, c_out = full_adder(b_en ^ 1, 0, 0)
         else:  # ADD
-            s_bit, c_out = full_adder(a_inv, b_en, carry)
+            s_bit, c_out = full_adder(a_inv, b_en, cin)
         
         s_val |= (s_bit << i)
         carry = c_out
@@ -261,14 +263,15 @@ class Mic1Datapath:
     
     def escrever_barramento_c(self, barramento_c, resultado):
         mapa = [
-            ('MAR', 0), ('MDR', 1), ('PC', 2), ('SP', 3),
-            ('LV', 4), ('CPP', 5), ('TOS', 6), ('OPC', 7), ('H', 8)
+            ('H', 0), ('OPC', 1), ('TOS', 2), ('CPP', 3),
+            ('LV', 4), ('SP', 5), ('PC', 6), ('MDR', 7), ('MAR', 8)
         ]
         escritos = []
         for i, (nome, pos) in enumerate(mapa):
-            if barramento_c[8 - i] == '1':
-                self.regs.set(nome, resultado)
-                escritos.append(nome)
+            if barramento_c[i] == '1':
+                if nome != 'MBR':
+                    self.regs.set(nome, resultado)
+                    escritos.append(nome)
         return escritos
     
     def executar_microinstrucao(self, ir):
@@ -336,7 +339,7 @@ class Mic1Datapath:
         # Destaca o que aconteceu no ciclo
         log.append("  [ AÇÃO DO CICLO ]")
         log.append(f"  ▸ Barramento B : {nome_b}")
-        log.append(f"  ▸ ULA          : {resultado_ula['op']} → Resultado = {resultado} (0x{resultado:08X})")
+        log.append(f"  ▸ ULA          : {resultado_ula['op']} → Resultado= {resultado} (0x{resultado:08X})")
         log.append(f"  ▸ Flags        : N={resultado_ula['N']}  Z={resultado_ula['Z']}  Vai-um={resultado_ula['vai_um']}")
         log.append(f"  ▸ Barramento C : {', '.join(escritos) if escritos else 'NENHUM'}")
         log.append(f"  ▸ Memória      : {operacao}")
@@ -361,27 +364,65 @@ class Mic1Datapath:
 
 def traduzir_iload(x):
     micros = []
-    micros.append("00110100100000000000101")  # H = LV
+    
+    # 1. H = LV
+    micros.append("00110100" + "100000000" + "00" + "0101")
+    
+    # 2. H = H + 1 
     for _ in range(x):
-        micros.append("00111001100000000000000")  # H = H + 1
-    micros.append("00111000000000001010000")  # MAR = H; rd
-    micros.append("00110101000001001000100")  # MAR = SP = SP + 1
-    micros.append("00110100001000000100000")  # TOS = MDR; wr
+        micros.append("00111101" + "100000000" + "00" + "1001")
+    
+    # 3. MAR = H
+    micros.append("00110100" + "000000001" + "01" + "1001")
+    
+    # 4. MAR = SP = SP + 1
+    micros.append("00111101" + "000001001" + "10" + "0100")
+    
+    # 5. TOS = MDR
+    micros.append("00110100" + "001000000" + "00" + "0000")
+    
     return micros
 
 def traduzir_dup():
     micros = []
-    micros.append("00110101000001001000100")  # MAR = SP = SP + 1
-    micros.append("00110100000000010100111")  # MDR = TOS; wr
+    
+    # 1. MAR = SP; rd
+    # ULA: S = SP (B=SP)
+    # C: MAR (bit 8) → 000000001
+    # MEM: READ → 01
+    # B: SP → 0100
+    micros.append("00110100" + "000000001" + "01" + "0100")
+    
+    # 2. SP = SP + 1; MAR = SP; wr
+    # ULA: S = SP + 1
+    # C: SP (bit 5), MAR (bit 8) → 000001001
+    # MEM: WRITE → 10
+    # B: SP → 0100
+    micros.append("00111101" + "000001001" + "10" + "0100")
+    
+    # 3. TOS = MDR
+    # ULA: S = MDR (B=MDR)
+    # C: TOS (bit 6) → 001000000
+    # MEM: NENHUMA → 00
+    # B: MDR → 0000
+    micros.append("00110100" + "001000000" + "00" + "0000")
+    
     return micros
 
 def traduzir_bipush(byte):
     micros = []
-    micros.append("00110000100000000000000")  # H = 0
-    for _ in range(byte):
-        micros.append("00111001100000000000000")  # H = H + 1
-    micros.append("00111000001000010000000")  # MDR = H; TOS = H
-    micros.append("00110101000001001100100")  # MAR = SP = SP + 1; wr
+    
+    # 1. SP = SP + 1; MAR = SP; wr
+    micros.append("00111101" + "000001001" + "10" + "0100")
+    
+    # 2. TOS = byte (coloca o byte diretamente em TOS)
+    byte_bits = format(byte & 0xFF, '08b')
+    # C: TOS (bit 6) → 001000000
+    # O byte está nos 8 primeiros bits, a ULA é o byte
+    # A ULA deve produzir 0 (ENA=0, ENB=0, INVA=0, INC=0)
+    # Mas o byte é a ULA, então... 
+    micros.append(byte_bits + "001000000" + "00" + "0000")
+    
     return micros
 
 def interpretar_ijvm(arquivo):
