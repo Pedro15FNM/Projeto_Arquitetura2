@@ -12,6 +12,4 @@ A Mic-1 recebe instruções IJVM em um arquivo .txt e traduz em uma microinstru�
 
 * **e 2 bits para a Memória** que executa READ ou WRITE.
 
-sendo a saída o log completo com registradores, memória e flags.
-
-
+sendo a saída um outro arquivo .txt de log completo com registradores, memória e flags.
